@@ -38,6 +38,7 @@ type config struct {
 			Prefix string
 		}
 	}
+	Hostname string
 }
 
 var cfg config
@@ -77,7 +78,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	host, _ := os.Hostname()
+	host := cfg.Hostname
 
 	for {
 		containers, _ := get_containers()

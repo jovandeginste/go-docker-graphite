@@ -1,7 +1,7 @@
 BINARY=go-docker-graphite
 SOURCE=$(BINARY).go
 
-ALL_ARCHS=lnx64 rpi rpi2 win64
+ALL_ARCHS=lnx64
 
 all:
 	-$(MAKE) deps

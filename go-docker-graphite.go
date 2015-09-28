@@ -31,6 +31,7 @@ type Metric struct {
 
 var (
 	app            = kingpin.New("go-docker-graphite", "A tool to report container metrics to a graphite backend")
+	Debug          = app.Flag("debug", "Enable verbose logging").Bool()
 	Hostname       = app.Flag("hostname", "hostname to report").Default("me").String()
 	GraphiteHost   = app.Flag("host", "graphite host").Required().String()
 	GraphitePort   = app.Flag("port", "graphite port").Default("2003").Int()
@@ -39,7 +40,6 @@ var (
 )
 
 func main() {
-	kingpin.Version("0.0.1")
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
 	graphite, err := graphite.NewGraphite(*GraphiteHost, *GraphitePort)
@@ -49,7 +49,9 @@ func main() {
 
 	graphite.Prefix = *GraphitePrefix
 
-	log.Printf("Loaded Graphite connection: %#v", graphite)
+	if *Debug {
+		log.Printf("Loaded Graphite connection: %#v", graphite)
+	}
 
 	if err != nil {
 		panic(err)
@@ -58,7 +60,9 @@ func main() {
 	for {
 		containers, _ := get_containers()
 		for _, c := range containers {
-			log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+			if *Debug {
+				log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+			}
 			send_container_metrics(*Hostname, c, graphite)
 		}
 		time.Sleep(time.Duration(*Delay) * time.Millisecond)
@@ -68,9 +72,14 @@ func main() {
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
 	n := c.PrimaryName()
 	var metric string
-	for _, m := range c.Metrics() {
+	var i int
+	var m Metric
+	for i, m = range c.Metrics() {
 		metric = h + "." + n + "." + m.Name
 		graphite.SimpleSend(metric, m.Value)
+	}
+	if *Debug {
+		log.Printf("Sent %d metrics for %s.%s", i, h, n)
 	}
 }
 
@@ -80,6 +89,9 @@ func get_containers() ([]Container, error) {
 		return nil, err
 	}
 
+	if *Debug {
+		log.Println("Sending request...")
+	}
 	_, err = c.Write([]byte("GET /containers/json HTTP/1.0\r\n\r\n"))
 	if err != nil {
 		return nil, err
@@ -98,6 +110,10 @@ func get_containers() ([]Container, error) {
 	result = bytes.Trim(result, "\x00")
 	results := bytes.SplitN(result, []byte{'\r', '\n', '\r', '\n'}, 2)
 	jsonBlob := results[1]
+	if *Debug {
+		log.Println("Got response:")
+		log.Println(string(jsonBlob))
+	}
 
 	var containers []Container
 	err = json.Unmarshal(jsonBlob, &containers)

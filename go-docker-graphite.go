@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/marpaia/graphite-golang"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/alecthomas/kingpin.v2"
 	"io/ioutil"
 	"log"
 	"net"
@@ -29,72 +29,39 @@ type Metric struct {
 	Value string
 }
 
-type config struct {
-	Collector struct {
-		Type          string
-		Configuration struct {
-			Host   string
-			Port   int
-			Prefix string
-		}
-	}
-	Hostname string
-	Delay    int
-}
-
-var cfg config
-
-func read_configuration(filename string) error {
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-
-	err = yaml.Unmarshal([]byte(data), &cfg)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
+var (
+	app            = kingpin.New("go-docker-graphite", "A tool to report container metrics to a graphite backend")
+	Hostname       = app.Flag("hostname", "hostname to report").Default("me").String()
+	GraphiteHost   = app.Flag("host", "graphite host").Required().String()
+	GraphitePort   = app.Flag("port", "graphite port").Default("2003").Int()
+	GraphitePrefix = app.Flag("prefix", "graphite prefix").Default("containers.metrics").String()
+	Delay          = app.Flag("delay", "delay between metric reports").Default("10000").Int()
+)
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("Need a config file as argument")
-	}
-	err := read_configuration(os.Args[1])
-	if err != nil {
-		log.Fatal("An error has occurred while read configuration file:", err)
-	}
+	kingpin.Version("0.0.1")
+	kingpin.MustParse(app.Parse(os.Args[1:]))
 
-	graphite, err := graphite.NewGraphite(cfg.Collector.Configuration.Host, cfg.Collector.Configuration.Port)
+	graphite, err := graphite.NewGraphite(*GraphiteHost, *GraphitePort)
 	if err != nil {
 		log.Fatal("An error has occurred while trying to create a Graphite connector:", err)
 	}
 
-	graphite.Prefix = cfg.Collector.Configuration.Prefix
+	graphite.Prefix = *GraphitePrefix
 
 	log.Printf("Loaded Graphite connection: %#v", graphite)
 
 	if err != nil {
 		panic(err)
 	}
-	host := cfg.Hostname
-	if host == "" {
-		host, _ = os.Hostname()
-	}
-	delay := cfg.Delay
-	if delay == 0 {
-		delay = 10000
-	}
 
 	for {
 		containers, _ := get_containers()
 		for _, c := range containers {
 			log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
-			send_container_metrics(host, c, graphite)
+			send_container_metrics(*Hostname, c, graphite)
 		}
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(time.Duration(*Delay) * time.Millisecond)
 	}
 }
 

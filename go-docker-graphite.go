@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 type Container struct {
@@ -56,6 +57,9 @@ func read_configuration(filename string) error {
 }
 
 func main() {
+	if len(os.Args) == 0 {
+		log.Fatal("Need a config file as argument")
+	}
 	err := read_configuration(os.Args[1])
 	if err != nil {
 		log.Fatal("An error has occurred while read configuration file:", err)
@@ -70,15 +74,19 @@ func main() {
 
 	log.Printf("Loaded Graphite connection: %#v", graphite)
 
-	containers, err := get_containers()
 	if err != nil {
 		panic(err)
 	}
 	host, _ := os.Hostname()
-	log.Printf("%#v", containers)
-	for _, c := range containers {
-		log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
-		send_container_metrics(host, c, graphite)
+
+	for {
+		containers, _ := get_containers()
+		log.Printf("%#v", containers)
+		for _, c := range containers {
+			log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+			send_container_metrics(host, c, graphite)
+		}
+		time.Sleep(10000 * time.Millisecond)
 	}
 }
 
@@ -86,7 +94,7 @@ func send_container_metrics(h string, c Container, graphite *graphite.Graphite) 
 	n := c.PrimaryName()
 	var metric string
 	for _, m := range c.Metrics() {
-		metric = fmt.Sprintf("%s.%s.%s", h, n, m.Name)
+		metric = h + "." + n + "." + m.Name
 		graphite.SimpleSend(metric, m.Value)
 	}
 }
@@ -121,7 +129,7 @@ func get_containers() ([]Container, error) {
 	return containers, err
 }
 
-func key_value_to_metric(data string) []Metric {
+func key_value_to_metric(prefix string, data string) []Metric {
 	var metrics []Metric
 	var split []string
 	var name string
@@ -130,6 +138,7 @@ func key_value_to_metric(data string) []Metric {
 		split = strings.SplitN(line, " ", 2)
 		name = split[0]
 		if name != "" {
+			name = prefix + "." + name
 			value = split[1]
 			metrics = append(metrics, Metric{name, value})
 		}
@@ -160,7 +169,7 @@ func (c Container) cpuacctMetrics() []Metric {
 	if err != nil {
 		return nil
 	}
-	return key_value_to_metric(string(data))
+	return key_value_to_metric("cpu", string(data))
 }
 
 func (c Container) memoryMetrics() []Metric {
@@ -168,7 +177,7 @@ func (c Container) memoryMetrics() []Metric {
 	if err != nil {
 		return nil
 	}
-	return key_value_to_metric(string(data))
+	return key_value_to_metric("memory", string(data))
 }
 
 func (c Container) Metrics() []Metric {

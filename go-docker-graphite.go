@@ -80,7 +80,7 @@ func get_containers() ([]Container, error) {
 		return nil, err
 	}
 
-	_, err = c.Write([]byte("GET /containers/json HTTP/1.1\r\n\r\n"))
+	_, err = c.Write([]byte("GET /containers/json HTTP/1.0\r\n\r\n"))
 	if err != nil {
 		return nil, err
 	}

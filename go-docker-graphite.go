@@ -39,6 +39,7 @@ type config struct {
 		}
 	}
 	Hostname string
+	Delay    int
 }
 
 var cfg config
@@ -58,7 +59,7 @@ func read_configuration(filename string) error {
 }
 
 func main() {
-	if len(os.Args) == 0 {
+	if len(os.Args) < 2 {
 		log.Fatal("Need a config file as argument")
 	}
 	err := read_configuration(os.Args[1])
@@ -79,15 +80,21 @@ func main() {
 		panic(err)
 	}
 	host := cfg.Hostname
+	if host == "" {
+		host, _ = os.Hostname()
+	}
+	delay := cfg.Delay
+	if delay == 0 {
+		delay = 10000
+	}
 
 	for {
 		containers, _ := get_containers()
-		log.Printf("%#v", containers)
 		for _, c := range containers {
 			log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
 			send_container_metrics(host, c, graphite)
 		}
-		time.Sleep(10000 * time.Millisecond)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 }
 

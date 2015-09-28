@@ -3,6 +3,8 @@ SOURCE=$(BINARY).go
 
 ALL_ARCHS=lnx64
 
+-include Makefile.local
+
 all:
 	-$(MAKE) deps
 	$(MAKE) build-all
@@ -29,8 +31,6 @@ build-rpi2:
 build-win64:
 	GOOS=windows GOARCH=amd64 SUFFIX=$(subst build-,,$(@)).exe $(MAKE) build
 
-docker: build-lnx64
+docker:
 	docker build -t go-docker-graphite .
 
-run:
-	docker run -v /sys/fs/cgroup/:/sys/fs/cgroup/:ro -v /var/run/docker.sock:/var/run/docker.sock -v $(shell pwd)/config.yaml:/config.yaml:ro --name metric-collector go-docker-graphite

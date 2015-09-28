@@ -1,7 +1,0 @@
-collector:
-  type: graphite
-  configuration:
-    host: my.graphite.domain.com
-    port: 2003
-    prefix: containers.metrics
-

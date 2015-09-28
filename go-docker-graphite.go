@@ -87,7 +87,7 @@ func get_containers() ([]Container, error) {
 
 	var result []byte
 
-	var in_bytes = make([]byte, 1024)
+	var in_bytes = make([]byte, 102400)
 	for {
 		num, err := c.Read(in_bytes)
 		result = append(result, in_bytes...)

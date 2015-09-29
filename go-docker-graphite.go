@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -155,6 +157,10 @@ func (c Container) memoryFile() string {
 	return fmt.Sprintf("/sys/fs/cgroup/memory/system.slice/docker-%s.scope/memory.stat", c.Id)
 }
 
+func (c Container) blkioFile() string {
+	return fmt.Sprintf("/sys/fs/cgroup/blkio/system.slice/docker-%s.scope/blkio.throttle.io_service_bytes", c.Id)
+}
+
 func (c Container) cpuacctMetrics() []Metric {
 	data, err := ioutil.ReadFile(c.cpuacctFile())
 	if err != nil {
@@ -171,9 +177,80 @@ func (c Container) memoryMetrics() []Metric {
 	return key_value_to_metric("memory", string(data))
 }
 
+func (c Container) blkioMetrics() []Metric {
+	data, err := ioutil.ReadFile(c.blkioFile())
+	if err != nil {
+		return nil
+	}
+	prefix := "blkio"
+
+	var metrics []Metric
+	var split []string
+	var name string
+	var dev string
+	var devA []string
+	var typ string
+	var value string
+	for _, line := range strings.Split(string(data), "\n") {
+		split = strings.SplitN(line, " ", 3)
+		dev = split[0]
+		if dev != "" {
+			if dev == "Total" {
+				name = prefix + "." + dev
+				value = split[1]
+				metrics = append(metrics, Metric{name, value})
+			} else {
+				dev = grep("^DEVNAME=", "/sys/dev/block/"+dev+"/uevent")
+				if dev != "" {
+					devA = strings.SplitN(dev, "=", 2)
+					dev = devA[1]
+					typ = split[1]
+					name = prefix + "." + dev + "." + typ
+					value = split[2]
+					metrics = append(metrics, Metric{name, value})
+				}
+			}
+		}
+	}
+
+	return metrics
+}
+
 func (c Container) Metrics() []Metric {
 	var metrics []Metric
 	metrics = append(metrics, c.cpuacctMetrics()...)
 	metrics = append(metrics, c.memoryMetrics()...)
+	metrics = append(metrics, c.blkioMetrics()...)
+	if *Debug {
+		log.Printf("Metrics: %s", metrics)
+	}
 	return metrics
+}
+
+func grep(re, filename string) string {
+	regex, err := regexp.Compile(re)
+	if err != nil {
+		return "" // there was a problem with the regular expression.
+	}
+
+	fh, err := os.Open(filename)
+	f := bufio.NewReader(fh)
+
+	if err != nil {
+		return "" // there was a problem opening the file.
+	}
+	defer fh.Close()
+
+	buf := make([]byte, 1024)
+	for {
+		buf, _, err = f.ReadLine()
+		if err != nil {
+			return ""
+		}
+
+		s := string(buf)
+		if regex.MatchString(s) {
+			return string(buf)
+		}
+	}
 }

@@ -71,7 +71,7 @@
           },
           "targets": [
             {
-              "target": "aliasByNode(perSecond(sumSeriesWithWildcards(containers.metrics.$server.$container.cpu.*, 5)),3,2)"
+              "target": "aliasByNode(perSecond(scale(containers.metrics.$server.$container.cpu_stats.cpu_usage.total_usage, 0.0000001)),3,2)"
             }
           ],
           "aliasColors": {},
@@ -137,7 +137,7 @@
           },
           "targets": [
             {
-              "target": "aliasByNode(sumSeriesWithWildcards(containers.metrics.$server.$container.memory.{total_cache,total_rss}, 5),3,2)"
+              "target": "aliasByNode(containers.metrics.$server.$container.memory_stats.usage,3,2)"
             }
           ],
           "aliasColors": {},
@@ -211,7 +211,7 @@
           },
           "targets": [
             {
-              "target": "aliasByNode(perSecond(containers.metrics.$server.$container.blkio.sda.Read),3,2,6)"
+              "target": "aliasByNode(perSecond(containers.metrics.$server.$container.blkio_stats.io_service_bytes_recursive.sda.read),3,2,6)"
             }
           ],
           "aliasColors": {},
@@ -277,7 +277,7 @@
           },
           "targets": [
             {
-              "target": "aliasByNode(perSecond(containers.metrics.$server.$container.blkio.sda.Write),3,2,6)"
+              "target": "aliasByNode(perSecond(containers.metrics.$server.$container.blkio_stats.io_service_bytes_recursive.sda.write),3,2,6)"
             }
           ],
           "aliasColors": {},

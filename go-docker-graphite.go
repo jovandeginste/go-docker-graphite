@@ -2,29 +2,16 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"github.com/fsouza/go-dockerclient"
 	"github.com/marpaia/graphite-golang"
 	"gopkg.in/alecthomas/kingpin.v2"
-	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
-
-type Container struct {
-	Command string
-	Created int
-	Id      string
-	Image   string
-	Names   []string
-	Ports   []string
-	Status  string
-}
 
 type Metric struct {
 	Name  string
@@ -41,190 +28,194 @@ var (
 	Delay          = app.Flag("delay", "delay between metric reports").Default("10000").Int()
 )
 
+var graphite_sender *graphite.Graphite
+
 func main() {
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
-	graphite, err := graphite.NewGraphite(*GraphiteHost, *GraphitePort)
+	var err error
+
+	graphite_sender, err = graphite.NewGraphite(*GraphiteHost, *GraphitePort)
 	if err != nil {
 		log.Fatal("An error has occurred while trying to create a Graphite connector:", err)
 	}
 
-	graphite.Prefix = *GraphitePrefix
+	graphite_sender.Prefix = *GraphitePrefix
 
 	if *Debug {
-		log.Printf("Loaded Graphite connection: %#v", graphite)
+		log.Printf("Loaded Graphite connection: %#v", graphite_sender)
 	}
 
 	if err != nil {
 		panic(err)
 	}
+	client, _ := docker.NewClient("unix:///var/run/docker.sock")
+	var name string
 
 	for {
-		containers, _ := get_containers()
+		containers, _ := client.ListContainers(docker.ListContainersOptions{All: false})
+
+		log.Printf("New containers: %d", len(containers))
 		for _, c := range containers {
+			name = primary_name(c.Names[0])
+
 			if *Debug {
-				log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+				log.Printf("Container: %s = %s", c.ID, name)
 			}
-			send_container_metrics(*Hostname, c, graphite)
+			stats_chan := make(chan *docker.Stats, 1)
+			done := make(chan bool)
+
+			go client.Stats(docker.StatsOptions{c.ID, stats_chan, false, done, 0})
+			go fetch_stats(stats_chan, name)
 		}
+
+		log.Println("Sleeping")
 		time.Sleep(time.Duration(*Delay) * time.Millisecond)
 	}
 }
-
-func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
-	n := c.PrimaryName()
-	var metric string
-	var i int
-	var m Metric
-	for i, m = range c.Metrics() {
-		metric = h + "." + n + "." + m.Name
-		graphite.SimpleSend(metric, m.Value)
-	}
-	if *Debug {
-		log.Printf("Sent %d metrics for %s.%s", i, h, n)
-	}
+func primary_name(name string) string {
+	return strings.Trim(name, "/")
 }
 
-func get_containers() ([]Container, error) {
-	c, err := net.Dial("unix", "/var/run/docker.sock")
-	if err != nil {
-		return nil, err
-	}
-
-	if *Debug {
-		log.Println("Sending request...")
-	}
-	_, err = c.Write([]byte("GET /containers/json HTTP/1.0\r\n\r\n"))
-	if err != nil {
-		return nil, err
-	}
-
-	var result []byte
-
-	var in_bytes = make([]byte, 102400)
+func fetch_stats(stats_chan chan *docker.Stats, container string) {
+	var metrics []Metric
 	for {
-		num, err := c.Read(in_bytes)
-		result = append(result, in_bytes...)
-		if err != nil || num < len(in_bytes) {
-			break
+		select {
+		case stats, ok := <-stats_chan:
+			if !ok {
+				return
+			}
+			metrics = parse_stats(stats)
+			go send_container_metrics(container, metrics)
 		}
 	}
-	result = bytes.Trim(result, "\x00")
-	results := bytes.SplitN(result, []byte{'\r', '\n', '\r', '\n'}, 2)
-	jsonBlob := results[1]
+}
+
+func send_container_metrics(n string, metrics []Metric) {
+	var metric string
+	var m Metric
+	for _, m = range metrics {
+		metric = *Hostname + "." + n + "." + m.Name
+		if *Debug {
+			log.Printf("Sending %s=%s", metric, m.Value)
+		}
+		graphite_sender.SimpleSend(metric, m.Value)
+	}
 	if *Debug {
-		log.Println("Got response:")
-		log.Println(string(jsonBlob))
+		log.Printf("Sent %d metric(s) for %s.%s", len(metrics), *Hostname, n)
 	}
-
-	var containers []Container
-	err = json.Unmarshal(jsonBlob, &containers)
-	return containers, err
 }
 
-func key_value_to_metric(prefix string, data string) []Metric {
+func parse_stats(stats *docker.Stats) []Metric {
+	var result []Metric
+	result = append(result, cpumetrics(stats)...)
+	result = append(result, memmetrics(stats)...)
+	result = append(result, netmetrics(stats)...)
+	result = append(result, blkiometrics(stats)...)
+	return result
+}
+
+func netmetrics(stats *docker.Stats) []Metric {
+	var result []Metric
+	network := stats.Network
+	result = append(result, Metric{"network.rx_dropped", strconv.FormatUint(network.RxDropped, 10)})
+	result = append(result, Metric{"network.rx_bytes", strconv.FormatUint(network.RxBytes, 10)})
+	result = append(result, Metric{"network.rx_errors", strconv.FormatUint(network.RxErrors, 10)})
+	result = append(result, Metric{"network.tx_packets", strconv.FormatUint(network.TxPackets, 10)})
+	result = append(result, Metric{"network.tx_dropped", strconv.FormatUint(network.TxDropped, 10)})
+	result = append(result, Metric{"network.rx_packets", strconv.FormatUint(network.RxPackets, 10)})
+	result = append(result, Metric{"network.tx_errors", strconv.FormatUint(network.TxErrors, 10)})
+	result = append(result, Metric{"network.tx_bytes", strconv.FormatUint(network.TxBytes, 10)})
+	return result
+}
+
+func blkiometrics(stats *docker.Stats) []Metric {
+	var result []Metric
+	result = append(result, blkiometricspart("blkio_stats.io_service_bytes_recursive", stats.BlkioStats.IOServiceBytesRecursive)...)
+	result = append(result, blkiometricspart("blkio_stats.io_serviced_recursive", stats.BlkioStats.IOServicedRecursive)...)
+	return result
+}
+
+func blkiometricspart(prefix string, blkios []docker.BlkioStatsEntry) []Metric {
 	var metrics []Metric
-	var split []string
-	var name string
-	var value string
-	for _, line := range strings.Split(data, "\n") {
-		split = strings.SplitN(line, " ", 2)
-		name = split[0]
-		if name != "" {
-			name = prefix + "." + name
-			value = split[1]
-			metrics = append(metrics, Metric{name, value})
-		}
-	}
-
-	return metrics
-}
-
-func (c Container) PrimaryName() string {
-	primary_name := c.Names[0]
-	if primary_name == "" {
-		return ""
-	}
-	primary_name = strings.Trim(primary_name, "/")
-	return primary_name
-}
-
-func (c Container) cpuacctFile() string {
-	return fmt.Sprintf("/sys/fs/cgroup/cpu,cpuacct/system.slice/docker-%s.scope/cpuacct.stat", c.Id)
-}
-
-func (c Container) memoryFile() string {
-	return fmt.Sprintf("/sys/fs/cgroup/memory/system.slice/docker-%s.scope/memory.stat", c.Id)
-}
-
-func (c Container) blkioFile() string {
-	return fmt.Sprintf("/sys/fs/cgroup/blkio/system.slice/docker-%s.scope/blkio.throttle.io_service_bytes", c.Id)
-}
-
-func (c Container) cpuacctMetrics() []Metric {
-	data, err := ioutil.ReadFile(c.cpuacctFile())
-	if err != nil {
-		return nil
-	}
-	return key_value_to_metric("cpu", string(data))
-}
-
-func (c Container) memoryMetrics() []Metric {
-	data, err := ioutil.ReadFile(c.memoryFile())
-	if err != nil {
-		return nil
-	}
-	return key_value_to_metric("memory", string(data))
-}
-
-func (c Container) blkioMetrics() []Metric {
-	data, err := ioutil.ReadFile(c.blkioFile())
-	if err != nil {
-		return nil
-	}
-	prefix := "blkio"
-
-	var metrics []Metric
-	var split []string
-	var name string
 	var dev string
+	var name string
 	var devA []string
 	var typ string
 	var value string
-	for _, line := range strings.Split(string(data), "\n") {
-		split = strings.SplitN(line, " ", 3)
-		dev = split[0]
+	var total uint64
+	for _, item := range blkios {
+		dev = strconv.FormatUint(item.Major, 10) + ":" + strconv.FormatUint(item.Minor, 10)
 		if dev != "" {
-			if dev == "Total" {
-				name = prefix + "." + dev
-				value = split[1]
+			dev = grep("^DEVNAME=", "/sys/dev/block/"+dev+"/uevent")
+			if dev != "" {
+				devA = strings.SplitN(dev, "=", 2)
+				dev = devA[1]
+				typ = strings.ToLower(item.Op)
+				name = prefix + "." + dev + "." + typ
+				value = strconv.FormatUint(item.Value, 10)
 				metrics = append(metrics, Metric{name, value})
-			} else {
-				dev = grep("^DEVNAME=", "/sys/dev/block/"+dev+"/uevent")
-				if dev != "" {
-					devA = strings.SplitN(dev, "=", 2)
-					dev = devA[1]
-					typ = split[1]
-					name = prefix + "." + dev + "." + typ
-					value = split[2]
-					metrics = append(metrics, Metric{name, value})
+				if typ == "total" {
+					total += item.Value
 				}
 			}
 		}
 	}
+	name = prefix + ".total"
+	value = strconv.FormatUint(total, 10)
+	metrics = append(metrics, Metric{name, value})
 
 	return metrics
 }
 
-func (c Container) Metrics() []Metric {
-	var metrics []Metric
-	metrics = append(metrics, c.cpuacctMetrics()...)
-	metrics = append(metrics, c.memoryMetrics()...)
-	metrics = append(metrics, c.blkioMetrics()...)
-	if *Debug {
-		log.Printf("Metrics: %s", metrics)
-	}
-	return metrics
+func cpumetrics(stats *docker.Stats) []Metric {
+	var result []Metric
+	cpu_usage := stats.CPUStats.CPUUsage
+	result = append(result, Metric{"cpu_stats.cpu_usage.total_usage", strconv.FormatUint(cpu_usage.TotalUsage, 10)})
+	result = append(result, Metric{"cpu_stats.cpu_usage.usage_in_kernelmode", strconv.FormatUint(cpu_usage.UsageInKernelmode, 10)})
+	result = append(result, Metric{"cpu_stats.cpu_usage.usage_in_usermode", strconv.FormatUint(cpu_usage.UsageInUsermode, 10)})
+	result = append(result, Metric{"cpu_stats.system_cpu_usage", strconv.FormatUint(stats.CPUStats.SystemCPUUsage, 10)})
+	return result
+}
+
+func memmetrics(stats *docker.Stats) []Metric {
+	var result []Metric
+	memory_stats := stats.MemoryStats.Stats
+	result = append(result, Metric{"memory_stats.failcnt", strconv.FormatUint(stats.MemoryStats.Failcnt, 10)})
+	result = append(result, Metric{"memory_stats.limit", strconv.FormatUint(stats.MemoryStats.Limit, 10)})
+	result = append(result, Metric{"memory_stats.max_usage", strconv.FormatUint(stats.MemoryStats.MaxUsage, 10)})
+	result = append(result, Metric{"memory_stats.stats.active_anon", strconv.FormatUint(memory_stats.ActiveAnon, 10)})
+	result = append(result, Metric{"memory_stats.stats.active_file", strconv.FormatUint(memory_stats.ActiveFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.cache", strconv.FormatUint(memory_stats.Cache, 10)})
+	result = append(result, Metric{"memory_stats.stats.hierarchical_memory_limit", strconv.FormatUint(memory_stats.HierarchicalMemoryLimit, 10)})
+	result = append(result, Metric{"memory_stats.stats.inactive_anon", strconv.FormatUint(memory_stats.InactiveAnon, 10)})
+	result = append(result, Metric{"memory_stats.stats.inactive_file", strconv.FormatUint(memory_stats.InactiveFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.mapped_file", strconv.FormatUint(memory_stats.MappedFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.pgfault", strconv.FormatUint(memory_stats.Pgfault, 10)})
+	result = append(result, Metric{"memory_stats.stats.pgmajfault", strconv.FormatUint(memory_stats.Pgmajfault, 10)})
+	result = append(result, Metric{"memory_stats.stats.pgpgin", strconv.FormatUint(memory_stats.Pgpgin, 10)})
+	result = append(result, Metric{"memory_stats.stats.pgpgout", strconv.FormatUint(memory_stats.Pgpgout, 10)})
+	result = append(result, Metric{"memory_stats.stats.rss", strconv.FormatUint(memory_stats.Rss, 10)})
+	result = append(result, Metric{"memory_stats.stats.rss_huge", strconv.FormatUint(memory_stats.RssHuge, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_active_anon", strconv.FormatUint(memory_stats.TotalActiveAnon, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_active_file", strconv.FormatUint(memory_stats.TotalActiveFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_cache", strconv.FormatUint(memory_stats.TotalCache, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_inactive_anon", strconv.FormatUint(memory_stats.TotalInactiveAnon, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_inactive_file", strconv.FormatUint(memory_stats.TotalInactiveFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_mapped_file", strconv.FormatUint(memory_stats.TotalMappedFile, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_pgfault", strconv.FormatUint(memory_stats.TotalPgfault, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_pgmajfault", strconv.FormatUint(memory_stats.TotalPgmafault, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_pgpgin", strconv.FormatUint(memory_stats.TotalPgpgin, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_pgpgout", strconv.FormatUint(memory_stats.TotalPgpgout, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_rss", strconv.FormatUint(memory_stats.TotalRss, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_rss_huge", strconv.FormatUint(memory_stats.TotalRssHuge, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_unevictable", strconv.FormatUint(memory_stats.TotalUnevictable, 10)})
+	result = append(result, Metric{"memory_stats.stats.total_writeback", strconv.FormatUint(memory_stats.TotalWriteback, 10)})
+	result = append(result, Metric{"memory_stats.stats.unevictable", strconv.FormatUint(memory_stats.Unevictable, 10)})
+	result = append(result, Metric{"memory_stats.stats.writeback", strconv.FormatUint(memory_stats.Writeback, 10)})
+	result = append(result, Metric{"memory_stats.usage", strconv.FormatUint(stats.MemoryStats.Usage, 10)})
+
+	return result
 }
 
 func grep(re, filename string) string {

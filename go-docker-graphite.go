@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -240,7 +241,7 @@ func (c Container) Metrics() []Metric {
 	metrics = append(metrics, c.cpuacctMetrics()...)
 	metrics = append(metrics, c.memoryMetrics()...)
 	metrics = append(metrics, c.blkioMetrics()...)
-	c.netMetrics()
+	metrics = append(metrics, c.netMetrics()...)
 	if *Debug {
 		log.Printf("Metrics: %s", metrics)
 	}
@@ -290,16 +291,47 @@ func (c Container) netMetrics() []Metric {
 	newns, _ := netns.GetFromPid(pid)
 	defer newns.Close()
 
-	//netns.Set(newns)
+	// Switch to the container namespace
 	netns.Set(newns)
 
-	// Do something with tne network namespace
-	ifaces, _ := net.Interfaces()
-
-	//var metrics []Metric
-	fmt.Printf("Interfaces: %v\n", ifaces)
+	data, _ := exec.Command("ip", "-s", "-o", "link").Output()
 
 	// Switch back to the original namespace
 	netns.Set(origns)
-	return nil
+	runtime.UnlockOSThread()
+
+	int_re, _ := regexp.Compile(`^\d+: ([^:]+): .*$`)
+	count_re, _ := regexp.Compile(`^ +(\d+) +(\d+) +(\d+) +(\d+) +(\d+) +(\d+) +$`)
+	prefix := "network"
+
+	var metrics []Metric
+	var interface_name string
+	var name string
+	var rx []string
+	var tx []string
+
+	for _, link_info := range strings.Split(string(data), "\n") {
+		split_link_info := strings.Split(link_info, "\\")
+		if len(split_link_info) == 6 {
+			interface_name = int_re.FindStringSubmatch(split_link_info[0])[1]
+			name = prefix + "." + interface_name
+			rx = count_re.FindStringSubmatch(split_link_info[3])
+			tx = count_re.FindStringSubmatch(split_link_info[5])
+
+			metrics = append(metrics, Metric{name + ".rx.bytes", rx[1]})
+			metrics = append(metrics, Metric{name + ".rx.packets", rx[2]})
+			metrics = append(metrics, Metric{name + ".rx.errors", rx[3]})
+			metrics = append(metrics, Metric{name + ".rx.dropped", rx[4]})
+			metrics = append(metrics, Metric{name + ".rx.overrun", rx[5]})
+			metrics = append(metrics, Metric{name + ".rx.mcast", rx[6]})
+
+			metrics = append(metrics, Metric{name + ".tx.bytes", tx[1]})
+			metrics = append(metrics, Metric{name + ".tx.packets", tx[2]})
+			metrics = append(metrics, Metric{name + ".tx.errors", tx[3]})
+			metrics = append(metrics, Metric{name + ".tx.dropped", tx[4]})
+			metrics = append(metrics, Metric{name + ".tx.overrun", tx[5]})
+			metrics = append(metrics, Metric{name + ".tx.mcast", tx[6]})
+		}
+	}
+	return metrics
 }

@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/marpaia/graphite-golang"
+	"github.com/vishvananda/netns"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
 	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -74,14 +77,14 @@ func main() {
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
 	n := c.PrimaryName()
 	var metric string
-	var i int
 	var m Metric
-	for i, m = range c.Metrics() {
+	metrics := c.Metrics()
+	for _, m = range metrics {
 		metric = h + "." + n + "." + m.Name
 		graphite.SimpleSend(metric, m.Value)
 	}
 	if *Debug {
-		log.Printf("Sent %d metrics for %s.%s", i, h, n)
+		log.Printf("Sent %d metrics for %s.%s", len(metrics), h, n)
 	}
 }
 
@@ -161,6 +164,22 @@ func (c Container) blkioFile() string {
 	return fmt.Sprintf("/sys/fs/cgroup/blkio/system.slice/docker-%s.scope/blkio.throttle.io_service_bytes", c.Id)
 }
 
+func (c Container) tasksFile() string {
+	return fmt.Sprintf("/sys/fs/cgroup/memory/system.slice/docker-%s.scope/tasks", c.Id)
+}
+
+func (c Container) firstPid() (int, error) {
+	data, err := ioutil.ReadFile(c.tasksFile())
+	if err != nil {
+		return -1, err
+	}
+	value, err := strconv.Atoi(strings.SplitN(string(data), "\n", 2)[0])
+	if err != nil {
+		return -1, err
+	}
+	return value, nil
+}
+
 func (c Container) cpuacctMetrics() []Metric {
 	data, err := ioutil.ReadFile(c.cpuacctFile())
 	if err != nil {
@@ -221,6 +240,7 @@ func (c Container) Metrics() []Metric {
 	metrics = append(metrics, c.cpuacctMetrics()...)
 	metrics = append(metrics, c.memoryMetrics()...)
 	metrics = append(metrics, c.blkioMetrics()...)
+	c.netMetrics()
 	if *Debug {
 		log.Printf("Metrics: %s", metrics)
 	}
@@ -253,4 +273,33 @@ func grep(re, filename string) string {
 			return string(buf)
 		}
 	}
+}
+
+func (c Container) netMetrics() []Metric {
+	// Lock the OS Thread so we don't accidentally switch namespaces
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Save the current network namespace
+	origns, _ := netns.Get()
+	defer origns.Close()
+
+	// Create a new network namespace
+	pid, _ := c.firstPid()
+
+	newns, _ := netns.GetFromPid(pid)
+	defer newns.Close()
+
+	//netns.Set(newns)
+	netns.Set(newns)
+
+	// Do something with tne network namespace
+	ifaces, _ := net.Interfaces()
+
+	//var metrics []Metric
+	fmt.Printf("Interfaces: %v\n", ifaces)
+
+	// Switch back to the original namespace
+	netns.Set(origns)
+	return nil
 }

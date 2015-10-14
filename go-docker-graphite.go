@@ -28,27 +28,9 @@ var (
 	Delay          = app.Flag("delay", "delay between metric reports").Default("10000").Int()
 )
 
-var graphite_sender *graphite.Graphite
-
 func main() {
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
-	var err error
-
-	graphite_sender, err = graphite.NewGraphite(*GraphiteHost, *GraphitePort)
-	if err != nil {
-		log.Fatal("An error has occurred while trying to create a Graphite connector:", err)
-	}
-
-	graphite_sender.Prefix = *GraphitePrefix
-
-	if *Debug {
-		log.Printf("Loaded Graphite connection: %#v", graphite_sender)
-	}
-
-	if err != nil {
-		panic(err)
-	}
 	client, _ := docker.NewClient("unix:///var/run/docker.sock")
 	var name string
 
@@ -94,6 +76,13 @@ func fetch_stats(stats_chan chan *docker.Stats, container string) {
 func send_container_metrics(n string, metrics []Metric) {
 	var metric string
 	var m Metric
+	graphite_sender, err := graphite.NewGraphite(*GraphiteHost, *GraphitePort)
+	if err != nil {
+		log.Fatal("An error has occurred while trying to create a Graphite connector:", err)
+	}
+
+	graphite_sender.Prefix = *GraphitePrefix
+
 	for _, m = range metrics {
 		metric = *Hostname + "." + n + "." + m.Name
 		if *Debug {

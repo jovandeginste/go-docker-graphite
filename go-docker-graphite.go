@@ -37,7 +37,7 @@ func main() {
 	for {
 		containers, _ := client.ListContainers(docker.ListContainersOptions{All: false})
 
-		log.Printf("New containers: %d", len(containers))
+		log.Printf("Containers: %d", len(containers))
 		for _, c := range containers {
 			name = primary_name(c.Names[0])
 
@@ -51,7 +51,6 @@ func main() {
 			go fetch_stats(stats_chan, name)
 		}
 
-		log.Println("Sleeping")
 		time.Sleep(time.Duration(*Delay) * time.Millisecond)
 	}
 }

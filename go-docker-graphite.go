@@ -26,8 +26,21 @@ type Container struct {
 	Id      string
 	Image   string
 	Names   []string
-	Ports   []string
+	Name    string
+	Ports   []ContainerPort
 	Status  string
+	Config  ContainerConfig
+}
+
+type ContainerPort struct {
+	IP          string
+	PrivatePort int
+	PublicPort  int
+	Type        string
+}
+
+type ContainerConfig struct {
+	Env []string
 }
 
 type Metric struct {
@@ -43,10 +56,15 @@ var (
 	GraphitePort   = app.Flag("port", "graphite port").Default("2003").Int()
 	GraphitePrefix = app.Flag("prefix", "graphite prefix").Default("containers.metrics").String()
 	Delay          = app.Flag("delay", "delay between metric reports").Default("10000").Int()
+	DockerHost     = app.Flag("dockerhost", "Docker host to contact").Default("unix:/var/run/docker.sock").String()
 )
 
 func main() {
 	kingpin.MustParse(app.Parse(os.Args[1:]))
+
+	split := strings.SplitN(*DockerHost, ":", 2)
+	proto := split[0]
+	conn := split[1]
 
 	graphite, err := graphite.NewGraphite(*GraphiteHost, *GraphitePort)
 	if err != nil {
@@ -64,33 +82,79 @@ func main() {
 	}
 
 	for {
-		containers, _ := get_containers()
-		for _, c := range containers {
-			if *Debug {
-				log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+		containers, err := get_containers(proto, conn)
+		if err != nil {
+			log.Printf("An error occurred: %s", err)
+		} else {
+			for _, c := range containers {
+				_ = c.GetInfo(proto, conn)
+				if *Debug {
+					log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+				}
+				send_container_metrics(*Hostname, c, graphite)
 			}
-			send_container_metrics(*Hostname, c, graphite)
 		}
 		time.Sleep(time.Duration(*Delay) * time.Millisecond)
 	}
 }
 
+func (c *Container) GetInfo(proto string, conn string) (err error) {
+	netconn, err := net.Dial(proto, conn)
+	if err != nil {
+		return err
+	}
+
+	id := c.Id
+	url := "/containers/" + id + "/json"
+
+	if *Debug {
+		log.Println("Sending request..." + url)
+	}
+	_, err = netconn.Write([]byte("GET " + url + " HTTP/1.0\r\n\r\n"))
+	if err != nil {
+		return err
+	}
+
+	var result []byte
+
+	var in_bytes = make([]byte, 102400)
+	for {
+		num, err := netconn.Read(in_bytes)
+		result = append(result, in_bytes...)
+		if err != nil || num < len(in_bytes) {
+			break
+		}
+	}
+	result = bytes.Trim(result, "\x00")
+	results := bytes.SplitN(result, []byte{'\r', '\n', '\r', '\n'}, 2)
+	jsonBlob := results[1]
+	if *Debug {
+		log.Println("Got response:")
+		log.Println(string(jsonBlob))
+	}
+
+	var container Container
+	err = json.Unmarshal(jsonBlob, &container)
+	*c = container
+	return err
+}
+
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
 	n := c.PrimaryName()
-	var metric string
-	var m Metric
+	//var metric string
+	//var m Metric
 	metrics := c.Metrics()
-	for _, m = range metrics {
-		metric = h + "." + n + "." + m.Name
-		graphite.SimpleSend(metric, m.Value)
-	}
+	//for _, m = range metrics {
+	//	metric = h + "." + n + "." + m.Name
+	//	graphite.SimpleSend(metric, m.Value)
+	//}
 	if *Debug {
 		log.Printf("Sent %d metrics for %s.%s", len(metrics), h, n)
 	}
 }
 
-func get_containers() ([]Container, error) {
-	c, err := net.Dial("unix", "/var/run/docker.sock")
+func get_containers(proto string, conn string) ([]Container, error) {
+	c, err := net.Dial(proto, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -145,12 +209,27 @@ func key_value_to_metric(prefix string, data string) []Metric {
 }
 
 func (c Container) PrimaryName() string {
-	primary_name := c.Names[0]
-	if primary_name == "" {
-		return ""
+	name := ""
+	if name == "" {
+		name = find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
 	}
-	primary_name = strings.Trim(primary_name, "/")
-	return primary_name
+	if name == "" {
+		name = find_value(c.Config.Env, "SERVICE_NAME")
+	}
+	if name == "" {
+		name = c.Name
+	}
+	if name == "" && len(c.Names) > 0 {
+		name = c.Names[0]
+	}
+	if name == "" {
+		name = "unknown"
+	}
+
+	name = strings.Trim(name, "/")
+	reg, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
+	name = reg.ReplaceAllString(name, "")
+	return name
 }
 
 func (c Container) cpuacctFile() string {
@@ -318,23 +397,40 @@ func (c Container) netMetrics() []Metric {
 			tx = strings.Fields(split_link_info[5])
 
 			if len(rx) == 6 {
-				metrics = append(metrics, Metric{name + ".rx.bytes", rx[0]})
-				metrics = append(metrics, Metric{name + ".rx.packets", rx[1]})
-				metrics = append(metrics, Metric{name + ".rx.errors", rx[2]})
-				metrics = append(metrics, Metric{name + ".rx.dropped", rx[3]})
-				metrics = append(metrics, Metric{name + ".rx.overrun", rx[4]})
-				metrics = append(metrics, Metric{name + ".rx.mcast", rx[5]})
+				rx_packets, _ := strconv.Atoi(rx[1])
+				if rx_packets > 0 {
+					metrics = append(metrics, Metric{name + ".rx.bytes", rx[0]})
+					metrics = append(metrics, Metric{name + ".rx.packets", rx[1]})
+					metrics = append(metrics, Metric{name + ".rx.errors", rx[2]})
+					metrics = append(metrics, Metric{name + ".rx.dropped", rx[3]})
+					metrics = append(metrics, Metric{name + ".rx.overrun", rx[4]})
+					metrics = append(metrics, Metric{name + ".rx.mcast", rx[5]})
+				}
 			}
 
 			if len(tx) == 6 {
-				metrics = append(metrics, Metric{name + ".tx.bytes", tx[0]})
-				metrics = append(metrics, Metric{name + ".tx.packets", tx[1]})
-				metrics = append(metrics, Metric{name + ".tx.errors", tx[2]})
-				metrics = append(metrics, Metric{name + ".tx.dropped", tx[3]})
-				metrics = append(metrics, Metric{name + ".tx.overrun", tx[4]})
-				metrics = append(metrics, Metric{name + ".tx.mcast", tx[5]})
+				tx_packets, _ := strconv.Atoi(tx[1])
+				if tx_packets > 0 {
+					metrics = append(metrics, Metric{name + ".tx.bytes", tx[0]})
+					metrics = append(metrics, Metric{name + ".tx.packets", tx[1]})
+					metrics = append(metrics, Metric{name + ".tx.errors", tx[2]})
+					metrics = append(metrics, Metric{name + ".tx.dropped", tx[3]})
+					metrics = append(metrics, Metric{name + ".tx.overrun", tx[4]})
+					metrics = append(metrics, Metric{name + ".tx.mcast", tx[5]})
+				}
 			}
 		}
 	}
 	return metrics
+}
+
+func find_value(ss []string, prefix string) (ret string) {
+	for _, s := range ss {
+		if strings.HasPrefix(s, prefix) {
+			split := strings.SplitN(s, "=", 2)
+			value := split[1]
+			return value
+		}
+	}
+	return ""
 }

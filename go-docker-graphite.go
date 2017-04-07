@@ -141,13 +141,13 @@ func (c *Container) GetInfo(proto string, conn string) (err error) {
 
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
 	n := c.PrimaryName()
-	//var metric string
-	//var m Metric
+	var metric string
+	var m Metric
 	metrics := c.Metrics()
-	//for _, m = range metrics {
-	//	metric = h + "." + n + "." + m.Name
-	//	graphite.SimpleSend(metric, m.Value)
-	//}
+	for _, m = range metrics {
+		metric = h + "." + n + "." + m.Name
+		graphite.SimpleSend(metric, m.Value)
+	}
 	if *Debug {
 		log.Printf("Sent %d metrics for %s.%s", len(metrics), h, n)
 	}
@@ -227,8 +227,14 @@ func (c Container) PrimaryName() string {
 	}
 
 	name = strings.Trim(name, "/")
+
 	reg, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
 	name = reg.ReplaceAllString(name, "")
+
+	reg, _ = regexp.Compile("[^A-Za-z0-9_\\.\\-]+")
+	name = reg.ReplaceAllString(name, "_")
+
+	name = strings.Trim(name, "_")
 	return name
 }
 
@@ -379,7 +385,7 @@ func (c Container) netMetrics() []Metric {
 	netns.Set(origns)
 	runtime.UnlockOSThread()
 
-	int_re, _ := regexp.Compile(`^\d+: ([^:]+): .*$`)
+	int_re, _ := regexp.Compile("^\\d+: ([^:@]+)[:@].*$")
 	prefix := "network"
 
 	var metrics []Metric

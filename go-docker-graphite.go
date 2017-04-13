@@ -217,21 +217,25 @@ func (c Container) PrimaryName(hostname string) string {
 			if len(task_name) == 0 {
 				task_name = "default"
 			}
-			name = alloc_name + "." + task_name
+			name = "nomad." + alloc_name + "." + task_name
 		}
 	}
 	if name == "" {
 		name = find_value(c.Config.Env, "SERVICE_NAME")
-		name = name + ".main." + hostname
+		if len(name) > 0 {
+			name = "registrator." + name + ".main." + hostname
+		}
 	}
 	if name == "" {
 		name = c.Name
-		stripUuid, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
-		name = stripUuid.ReplaceAllString(name, "")
-		name = name + ".main." + hostname
+		if len(name) > 0 {
+			stripUuid, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
+			name = stripUuid.ReplaceAllString(name, "")
+			name = "random." + name + ".main." + hostname
+		}
 	}
 	if name == "" {
-		name = "unknown.main." + hostname
+		name = "random.unknown.main." + hostname
 	}
 
 	stripNonWord, _ := regexp.Compile("[^A-Za-z0-9_\\.\\-]+")

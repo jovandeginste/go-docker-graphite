@@ -229,7 +229,13 @@ func (c Container) PrimaryName(hostname string) (string, error) {
 	if name == "" {
 		name = find_value(c.Config.Env, "SERVICE_NAME")
 		if len(name) > 0 {
-			name = "registrator." + name + ".main." + hostname
+			tag := "default"
+			tags := find_value(c.Config.Env, "SERVICE_TAGS")
+			if len(tags) > 0 {
+				split_tags := strings.SplitN(tags, ",", 2)
+				tag = split_tags[0]
+			}
+			name = "registrator." + name + "." + tag + "." + hostname
 		}
 	}
 	if name == "" {

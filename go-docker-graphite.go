@@ -88,7 +88,7 @@ func main() {
 			for _, c := range containers {
 				_ = c.GetInfo(proto, conn)
 				if *Debug {
-					log.Printf("Container: %s = %s", c.Id, c.PrimaryName())
+					log.Printf("Container: %s = %s", c.Id, c.PrimaryName(*Hostname))
 				}
 				send_container_metrics(*Hostname, c, graphite)
 			}
@@ -139,12 +139,12 @@ func (c *Container) GetInfo(proto string, conn string) (err error) {
 }
 
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
-	n := c.PrimaryName()
+	n := c.PrimaryName(h)
 	var metric string
 	var m Metric
 	metrics := c.Metrics()
 	for _, m = range metrics {
-		metric = h + "." + n + "." + m.Name
+		metric = n + "." + m.Name
 		graphite.SimpleSend(metric, m.Value)
 	}
 	if *Debug {
@@ -207,27 +207,31 @@ func key_value_to_metric(prefix string, data string) []Metric {
 	return metrics
 }
 
-func (c Container) PrimaryName() string {
+func (c Container) PrimaryName(hostname string) string {
 	name := ""
 	if name == "" {
 		alloc_name := find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
-		task_name := find_value(c.Config.Env, "NOMAD_TASK_NAME")
-		task_name = strings.TrimPrefix(task_name, alloc_name+"-")
-		if len(task_name) == 0 {
-			task_name = "default"
+		if len(alloc_name) > 0 {
+			task_name := find_value(c.Config.Env, "NOMAD_TASK_NAME")
+			task_name = strings.TrimPrefix(task_name, alloc_name+"-")
+			if len(task_name) == 0 {
+				task_name = "default"
+			}
+			name = alloc_name + "." + task_name
 		}
-		name = alloc_name + "." + task_name
 	}
 	if name == "" {
 		name = find_value(c.Config.Env, "SERVICE_NAME")
+		name = name + ".main." + hostname
 	}
 	if name == "" {
 		name = c.Name
 		stripUuid, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
 		name = stripUuid.ReplaceAllString(name, "")
+		name = name + ".main." + hostname
 	}
 	if name == "" {
-		name = "unknown"
+		name = "unknown.main." + hostname
 	}
 
 	stripNonWord, _ := regexp.Compile("[^A-Za-z0-9_\\.\\-]+")

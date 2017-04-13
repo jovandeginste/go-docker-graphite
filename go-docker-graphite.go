@@ -245,7 +245,12 @@ func (c Container) PrimaryName(hostname string) (string, error) {
 	stripNonWord, _ := regexp.Compile("[^A-Za-z0-9_\\.\\-]+")
 	name = stripNonWord.ReplaceAllString(name, "_")
 
-	name = strings.Trim(name, "_")
+	removeDoubleIllegalChars, _ := regexp.Compile("__+")
+	name = removeDoubleIllegalChars.ReplaceAllString(name, "_")
+
+	trimIllegalChars, _ := regexp.Compile("_?\\._?")
+	name = trimIllegalChars.ReplaceAllString(name, ".")
+
 	return name, nil
 }
 

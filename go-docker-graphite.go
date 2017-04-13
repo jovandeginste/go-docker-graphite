@@ -87,9 +87,6 @@ func main() {
 		} else {
 			for _, c := range containers {
 				_ = c.GetInfo(proto, conn)
-				if *Debug {
-					log.Printf("Container: %s = %s", c.Id, c.PrimaryName(*Hostname))
-				}
 				send_container_metrics(*Hostname, c, graphite)
 			}
 		}
@@ -139,7 +136,14 @@ func (c *Container) GetInfo(proto string, conn string) (err error) {
 }
 
 func send_container_metrics(h string, c Container, graphite *graphite.Graphite) {
-	n := c.PrimaryName(h)
+	n, err := c.PrimaryName(h)
+	if err != nil {
+		log.Printf("An error occurred: %s", err)
+		return
+	}
+	if *Debug {
+		log.Printf("Container: %s = %s", c.Id, n)
+	}
 	var metric string
 	var m Metric
 	metrics := c.Metrics()
@@ -207,7 +211,7 @@ func key_value_to_metric(prefix string, data string) []Metric {
 	return metrics
 }
 
-func (c Container) PrimaryName(hostname string) string {
+func (c Container) PrimaryName(hostname string) (string, error) {
 	name := ""
 	if name == "" {
 		alloc_name := find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
@@ -235,14 +239,14 @@ func (c Container) PrimaryName(hostname string) string {
 		}
 	}
 	if name == "" {
-		name = "random.unknown.main." + hostname
+		return "", fmt.Errorf("Could not find a sane name for container '%s'", c.Id)
 	}
 
 	stripNonWord, _ := regexp.Compile("[^A-Za-z0-9_\\.\\-]+")
 	name = stripNonWord.ReplaceAllString(name, "_")
 
 	name = strings.Trim(name, "_")
-	return name
+	return name, nil
 }
 
 func (c Container) cpuacctFile() string {

@@ -216,8 +216,9 @@ func (c Container) PrimaryName(hostname string) (string, error) {
 	if name == "" {
 		alloc_name := find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
 		if len(alloc_name) > 0 {
+			job_name := find_value(c.Config.Env, "NOMAD_JOB_NAME")
 			task_name := find_value(c.Config.Env, "NOMAD_TASK_NAME")
-			task_name = strings.TrimPrefix(task_name, alloc_name)
+			task_name = strings.TrimPrefix(task_name, job_name)
 			task_name = strings.TrimPrefix(task_name, "-")
 			if len(task_name) == 0 {
 				task_name = "default"

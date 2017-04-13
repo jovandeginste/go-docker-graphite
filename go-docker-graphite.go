@@ -25,7 +25,6 @@ type Container struct {
 	Created int
 	Id      string
 	Image   string
-	Names   []string
 	Name    string
 	Ports   []ContainerPort
 	Status  string
@@ -211,28 +210,28 @@ func key_value_to_metric(prefix string, data string) []Metric {
 func (c Container) PrimaryName() string {
 	name := ""
 	if name == "" {
-		name = find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
+		alloc_name := find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
+		task_name := find_value(c.Config.Env, "NOMAD_TASK_NAME")
+		task_name = strings.TrimPrefix(task_name, alloc_name+"-")
+		if len(task_name) == 0 {
+			task_name = "default"
+		}
+		name = alloc_name + "." + task_name
 	}
 	if name == "" {
 		name = find_value(c.Config.Env, "SERVICE_NAME")
 	}
 	if name == "" {
 		name = c.Name
-	}
-	if name == "" && len(c.Names) > 0 {
-		name = c.Names[0]
+		stripUuid, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
+		name = stripUuid.ReplaceAllString(name, "")
 	}
 	if name == "" {
 		name = "unknown"
 	}
 
-	name = strings.Trim(name, "/")
-
-	reg, _ := regexp.Compile("-[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}")
-	name = reg.ReplaceAllString(name, "")
-
-	reg, _ = regexp.Compile("[^A-Za-z0-9_\\.\\-]+")
-	name = reg.ReplaceAllString(name, "_")
+	stripNonWord, _ := regexp.Compile("[^A-Za-z0-9_\\.\\-]+")
+	name = stripNonWord.ReplaceAllString(name, "_")
 
 	name = strings.Trim(name, "_")
 	return name

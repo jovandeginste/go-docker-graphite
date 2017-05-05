@@ -216,6 +216,8 @@ func (c Container) PrimaryName(hostname string) (string, error) {
 	if name == "" {
 		alloc_name := find_value(c.Config.Env, "NOMAD_ALLOC_NAME")
 		if len(alloc_name) > 0 {
+			stripPeriodic, _ := regexp.Compile("_periodic-[0-9]*$")
+			alloc_name = stripPeriodic.ReplaceAllString(alloc_name, "-periodic")
 			job_name := find_value(c.Config.Env, "NOMAD_JOB_NAME")
 			task_name := find_value(c.Config.Env, "NOMAD_TASK_NAME")
 			task_name = strings.TrimPrefix(task_name, job_name)

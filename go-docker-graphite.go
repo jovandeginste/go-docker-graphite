@@ -85,6 +85,11 @@ func main() {
 		if err != nil {
 			log.Printf("An error occurred: %s", err)
 		} else {
+			err = graphite.Connect()
+			if err != nil {
+				log.Printf("Could not connect graphie: %s", err)
+				panic(err)
+			}
 			for _, c := range containers {
 				_ = c.GetInfo(proto, conn)
 				send_container_metrics(*Hostname, c, graphite)

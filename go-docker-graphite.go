@@ -5,9 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/marpaia/graphite-golang"
-	"github.com/vishvananda/netns"
-	"gopkg.in/alecthomas/kingpin.v2"
 	"io/ioutil"
 	"log"
 	"net"
@@ -18,6 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marpaia/graphite-golang"
+	"github.com/vishvananda/netns"
+	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 type Container struct {
@@ -121,7 +122,7 @@ func (c *Container) GetInfo(proto string, conn string) (err error) {
 	var in_bytes = make([]byte, 102400)
 	for {
 		num, err := netconn.Read(in_bytes)
-		result = append(result, in_bytes...)
+		result = append(result, in_bytes[0:num]...)
 		if err != nil || num < len(in_bytes) {
 			break
 		}
@@ -180,7 +181,7 @@ func get_containers(proto string, conn string) ([]Container, error) {
 	var in_bytes = make([]byte, 102400)
 	for {
 		num, err := c.Read(in_bytes)
-		result = append(result, in_bytes...)
+		result = append(result, in_bytes[0:num]...)
 		if err != nil || num < len(in_bytes) {
 			break
 		}

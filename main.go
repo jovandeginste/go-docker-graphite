@@ -81,7 +81,7 @@ func send_container_metrics(h string, c Container, graphite *graphite.Graphite) 
 	metrics := c.Metrics()
 	for _, m = range metrics {
 		metric = n + "." + m.CleanName()
-		graphite.SimpleSend(metric, m.Value)
+		graphite.SimpleSend(metric, m.CleanValue())
 	}
 	if *Debug {
 		log.Printf("Sent %d metrics for %s.%s", len(metrics), h, n)
@@ -90,6 +90,10 @@ func send_container_metrics(h string, c Container, graphite *graphite.Graphite) 
 
 func (m *Metric) CleanName() string {
 	return strings.TrimSpace(m.Name)
+}
+
+func (m *Metric) CleanValue() string {
+	return strings.TrimSpace(m.Value)
 }
 
 func get_containers(proto string, conn string) ([]Container, error) {

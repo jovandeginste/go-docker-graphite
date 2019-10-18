@@ -94,12 +94,14 @@ func (c Container) cpuacctMetrics() []Metric {
 	if err != nil {
 		return nil
 	}
+	metrics := key_value_to_metric("cpu", string(data))
+
 	usage, err := ioutil.ReadFile(c.cpuacctUsageFile())
 	if err == nil {
-		data = append(data, []byte("usage ")...)
-		data = append(data, usage...)
+		metrics = append(metrics, Metric{"cpu.usage_ns", string(usage)})
 	}
-	return key_value_to_metric("cpu", string(data))
+
+	return metrics
 }
 
 func (c Container) memoryMetrics() []Metric {

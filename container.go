@@ -7,9 +7,13 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/vishvananda/netns"
 )
 
 func (c *Container) GetInfo(proto string, conn string) (err error) {
@@ -95,6 +99,75 @@ func (c Container) memoryMetrics() []Metric {
 		return nil
 	}
 	return key_value_to_metric("memory", string(data))
+}
+
+func (c Container) netMetrics() []Metric {
+	// Lock the OS Thread so we don't accidentally switch namespaces
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Save the current network namespace
+	origns, _ := netns.Get()
+	defer origns.Close()
+
+	// Create a new network namespace
+	pid, _ := c.firstPid()
+
+	newns, _ := netns.GetFromPid(pid)
+	defer newns.Close()
+
+	// Switch to the container namespace
+	netns.Set(newns)
+
+	data, _ := exec.Command("ip", "-s", "-o", "link").Output()
+
+	// Switch back to the original namespace
+	netns.Set(origns)
+	runtime.UnlockOSThread()
+
+	int_re, _ := regexp.Compile("^\\d+: ([^:@]+)[:@].*$")
+	prefix := "network"
+
+	var metrics []Metric
+	var interface_name string
+	var name string
+	var rx []string
+	var tx []string
+
+	for _, link_info := range strings.Split(string(data), "\n") {
+		split_link_info := strings.Split(link_info, "\\")
+		if len(split_link_info) >= 6 {
+			interface_name = int_re.FindStringSubmatch(split_link_info[0])[1]
+			name = prefix + "." + interface_name
+			rx = strings.Fields(split_link_info[3])
+			tx = strings.Fields(split_link_info[5])
+
+			if len(rx) == 6 {
+				rx_packets, _ := strconv.Atoi(rx[1])
+				if rx_packets > 0 {
+					metrics = append(metrics, Metric{name + ".rx.bytes", rx[0]})
+					metrics = append(metrics, Metric{name + ".rx.packets", rx[1]})
+					metrics = append(metrics, Metric{name + ".rx.errors", rx[2]})
+					metrics = append(metrics, Metric{name + ".rx.dropped", rx[3]})
+					metrics = append(metrics, Metric{name + ".rx.overrun", rx[4]})
+					metrics = append(metrics, Metric{name + ".rx.mcast", rx[5]})
+				}
+			}
+
+			if len(tx) == 6 {
+				tx_packets, _ := strconv.Atoi(tx[1])
+				if tx_packets > 0 {
+					metrics = append(metrics, Metric{name + ".tx.bytes", tx[0]})
+					metrics = append(metrics, Metric{name + ".tx.packets", tx[1]})
+					metrics = append(metrics, Metric{name + ".tx.errors", tx[2]})
+					metrics = append(metrics, Metric{name + ".tx.dropped", tx[3]})
+					metrics = append(metrics, Metric{name + ".tx.overrun", tx[4]})
+					metrics = append(metrics, Metric{name + ".tx.mcast", tx[5]})
+				}
+			}
+		}
+	}
+	return metrics
 }
 
 func (c Container) blkioMetrics() []Metric {

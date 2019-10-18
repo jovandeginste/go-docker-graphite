@@ -80,12 +80,16 @@ func send_container_metrics(h string, c Container, graphite *graphite.Graphite) 
 	var m Metric
 	metrics := c.Metrics()
 	for _, m = range metrics {
-		metric = n + "." + m.Name
+		metric = n + "." + m.CleanName()
 		graphite.SimpleSend(metric, m.Value)
 	}
 	if *Debug {
 		log.Printf("Sent %d metrics for %s.%s", len(metrics), h, n)
 	}
+}
+
+func (m *Metric) CleanName() string {
+	return strings.TrimSpace(m.Name)
 }
 
 func get_containers(proto string, conn string) ([]Container, error) {

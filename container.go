@@ -57,6 +57,10 @@ func (c *Container) GetInfo(proto string, conn string) (err error) {
 	return err
 }
 
+func (c Container) cpuacctUsageFile() string {
+	return fmt.Sprintf("/sys/fs/cgroup/cpu,cpuacct/system.slice/docker-%s.scope/cpuacct.usage", c.Id)
+}
+
 func (c Container) cpuacctFile() string {
 	return fmt.Sprintf("/sys/fs/cgroup/cpu,cpuacct/system.slice/docker-%s.scope/cpuacct.stat", c.Id)
 }
@@ -89,6 +93,11 @@ func (c Container) cpuacctMetrics() []Metric {
 	data, err := ioutil.ReadFile(c.cpuacctFile())
 	if err != nil {
 		return nil
+	}
+	usage, err := ioutil.ReadFile(c.cpuacctUsageFile())
+	if err == nil {
+		data = append(data, []byte("usage ")...)
+		data = append(data, usage...)
 	}
 	return key_value_to_metric("cpu", string(data))
 }
